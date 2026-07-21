@@ -29,6 +29,75 @@ or ManTra-Net are recommended.
 _TRUFOR_MODEL = None
 _TRUFOR_DEVICE = None
 
+def get_trufor_paths():
+    """
+    Locates TruFor code directory, configuration file, and model weights.
+    Prioritizes embedded project code directory (modules/trufor) and internal models.
+    """
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    internal_trufor_dir = os.path.join(base_dir, "modules", "trufor")
+    
+    internal_weights_dir = os.path.join(base_dir, "models", "trufor", "pretrained_models")
+    internal_weights_path = os.path.join(internal_weights_dir, "trufor.pth.tar")
+
+    possible_weights = [
+        internal_weights_path,
+        os.path.join(base_dir, "models", "trufor.pth.tar"),
+        os.path.abspath(os.path.join(base_dir, "..", "TruFor", "TruFor_train_test", "pretrained_models", "trufor.pth.tar")),
+    ]
+
+    weights_path = next((p for p in possible_weights if os.path.exists(p)), None)
+
+    if os.path.exists(os.path.join(internal_trufor_dir, "lib", "config", "trufor_ph3.yaml")):
+        trufor_dir = internal_trufor_dir
+    else:
+        trufor_dir = os.path.abspath(os.path.join(base_dir, "..", "TruFor", "TruFor_train_test"))
+
+    config_path = os.path.join(trufor_dir, "lib", "config", "trufor_ph3.yaml")
+    
+    if weights_path is None:
+        weights_path = download_trufor_weights_if_needed(internal_weights_path)
+
+    return trufor_dir, weights_path, config_path
+
+def download_trufor_weights_if_needed(target_path: str):
+    """
+    Downloads TruFor pretrained weights automatically if not present locally.
+    """
+    if os.path.exists(target_path):
+        return target_path
+
+    import zipfile
+    import urllib.request
+
+    weights_dir = os.path.dirname(target_path)
+    os.makedirs(weights_dir, exist_ok=True)
+
+    download_url = "https://www.grip.unina.it/download/prog/TruFor/TruFor_weights.zip"
+    zip_path = os.path.join(weights_dir, "TruFor_weights.zip")
+
+    print(f"Downloading TruFor pretrained weights to {target_path}...")
+    try:
+        req = urllib.request.Request(download_url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=30) as response, open(zip_path, 'wb') as out_file:
+            out_file.write(response.read())
+
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            zip_ref.extractall(weights_dir)
+
+        if os.path.exists(zip_path):
+            os.remove(zip_path)
+
+        if os.path.exists(target_path):
+            print("TruFor weights successfully downloaded and extracted.")
+            return target_path
+    except Exception as e:
+        print(f"Automatic download of TruFor weights failed: {e}")
+        if os.path.exists(zip_path):
+            os.remove(zip_path)
+
+    return None
+
 def load_trufor_model():
     """
     Lazy loads and caches the TruFor deep learning forgery detection model.
@@ -37,12 +106,10 @@ def load_trufor_model():
     if _TRUFOR_MODEL is not None:
         return _TRUFOR_MODEL, _TRUFOR_DEVICE
 
-    trufor_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "TruFor", "TruFor_train_test"))
-    weights_path = os.path.join(trufor_dir, "pretrained_models", "trufor.pth.tar")
-    config_path = os.path.join(trufor_dir, "lib", "config", "trufor_ph3.yaml")
+    trufor_dir, weights_path, config_path = get_trufor_paths()
 
-    if not os.path.exists(weights_path):
-        print(f"Warning: TruFor weights file not found at: {weights_path}")
+    if weights_path is None or not os.path.exists(weights_path):
+        print(f"Warning: TruFor weights file not found. Falling back to heuristic edit detection.")
         return None, None
 
     if trufor_dir not in sys.path:
@@ -57,6 +124,8 @@ def load_trufor_model():
 
         config.defrost()
         config.merge_from_file(config_path)
+        config.MODEL.PRETRAINED = ''
+        config.MODEL.EXTRA.NP_WEIGHTS = ''
         config.freeze()
 
         model = get_model(config)
