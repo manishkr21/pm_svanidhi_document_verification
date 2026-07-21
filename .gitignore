@@ -216,3 +216,55 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ----------------------------------------------------
+# 🤖 Machine Learning Models & Weights
+# ----------------------------------------------------
+*.pth
+*.pth.tar
+*.pt
+*.onnx
+*.bin
+*.safetensors
+*.ckpt
+*.h5
+*.pb
+*.tflite
+*.weights
+*.pkl
+
+# ----------------------------------------------------
+# 📁 Data, Uploads, Temporary Files & Logs
+# ----------------------------------------------------
+data/
+uploads/
+temp/
+tmp/
+output/
+outputs/
+results/
+runs/
+logs/
+*.log
+
+# ----------------------------------------------------
+# 💻 IDEs & Editors
+# ----------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ----------------------------------------------------
+# 🍏 OS Specific Files
+# ----------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+
