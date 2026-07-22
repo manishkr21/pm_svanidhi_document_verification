@@ -13,6 +13,7 @@ from fake_doc_detector.pan import PANDetector
 
 
 
+
 logger = logging.getLogger(__name__)
 
 
@@ -215,6 +216,100 @@ class DetectionPipeline:
 
         return result
 
+    def _process_voter_id_document(self, document: Document) -> Dict:
+        """
+        Run OCR and Voter ID validation for a single Voter ID document.
+
+        Args:
+            document: Document object for Voter ID type
+
+        Returns:
+            Dictionary containing per-document processing results
+        """
+        file_path = document.file_path
+        file_suffix = Path(file_path).suffix.lower()
+        image_formats = {".png", ".jpg", ".jpeg", ".tiff", ".bmp", ".pdf"}
+
+        result: Dict = {
+            "file_name": document.file_name,
+            "file_path": file_path,
+            "ocr_success": False,
+            "detected_numbers": [],
+            "valid_numbers": [],
+            "invalid_numbers": [],
+            "errors": [],
+        }
+
+        if file_suffix not in image_formats:
+            result["errors"].append(
+                f"Unsupported OCR format for Voter ID flow: {file_suffix}. "
+                "Supported formats are .png, .jpg, .jpeg, .tiff, .bmp, .pdf"
+            )
+            return result
+
+        ocr_result = self.ocr_extractor.extract_text_from_image(file_path)
+        result["ocr_success"] = ocr_result.get("success", False)
+        result["errors"].extend(ocr_result.get("errors", []))
+
+        extracted_text = ocr_result.get("extracted_text", "")
+        
+        # Regex to find Voter ID / EPIC number: 3 uppercase letters, 7 digits
+        found_ids = re.findall(r'[A-Za-z]{3}\s*\d{7}', extracted_text)
+        cleaned_ids = ["".join(fid.split()).upper() for fid in found_ids]
+        
+        # Deduplicate
+        cleaned_ids = list(set(cleaned_ids))
+        result["detected_numbers"] = cleaned_ids
+        
+        # Default state selection
+        guessed_state = "Delhi"
+            
+        if not cleaned_ids:
+            result["errors"].append("No Voter ID / EPIC numbers found in extracted text")
+            return result
+
+        # pyrefly: ignore [missing-import]
+        from playwright.sync_api import sync_playwright
+        
+        try:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=False)
+                context = browser.new_context()
+                page = context.new_page()
+                
+                for voter_id in cleaned_ids:
+                    validation_result = self.voter_id_detector.detect(
+                        voter_id=voter_id,
+                        state_name=guessed_state,
+                        page=page
+                    )
+                    
+                    matched_details = ""
+                    if validation_result.get("overall_status") == "VALID":
+                        details = validation_result.get("details", {})
+                        matched_details = f"Voter: {details.get('matched_name')}"
+                        
+                    number_result = {
+                        "voter_id": voter_id,
+                        "raw_match": f"Voter ID: {voter_id} | State: {guessed_state} | {matched_details}",
+                        "status": validation_result.get("overall_status", "UNKNOWN"),
+                        "confidence": validation_result.get("confidence", 0.0),
+                        "is_fake": validation_result.get("is_fake", True),
+                        "messages": validation_result.get("messages", []),
+                    }
+                    
+                    if validation_result.get("overall_status") == "VALID":
+                        result["valid_numbers"].append(number_result)
+                    else:
+                        result["invalid_numbers"].append(number_result)
+                        
+                browser.close()
+        except Exception as pl_err:
+            logger.error(f"Playwright execution error during document validation: {pl_err}")
+            result["errors"].append(f"Playwright automation error: {pl_err}")
+
+        return result
+
     def detect(self) -> dict:
         """
         Run the detection pipeline.
@@ -241,6 +336,13 @@ class DetectionPipeline:
                 "invalid_numbers": 0,
             },
             "pan_summary": {
+                "processed": 0,
+                "ocr_success": 0,
+                "numbers_found": 0,
+                "valid_numbers": 0,
+                "invalid_numbers": 0,
+            },
+            "voter_id_summary": {
                 "processed": 0,
                 "ocr_success": 0,
                 "numbers_found": 0,
@@ -275,13 +377,27 @@ class DetectionPipeline:
                 results["pan_summary"]["numbers_found"] += detected_count
                 results["pan_summary"]["valid_numbers"] += len(doc_result["valid_numbers"])
                 results["pan_summary"]["invalid_numbers"] += len(doc_result["invalid_numbers"])
+            elif document.doc_type == DocumentType.VOTER_ID:
+                doc_result = self._process_voter_id_document(document)
+                results["document_results"].append(doc_result)
+
+                results["voter_id_summary"]["processed"] += 1
+                if doc_result["ocr_success"]:
+                    results["voter_id_summary"]["ocr_success"] += 1
+
+                detected_count = len(doc_result["detected_numbers"])
+                results["voter_id_summary"]["numbers_found"] += detected_count
+                results["voter_id_summary"]["valid_numbers"] += len(doc_result["valid_numbers"])
+                results["voter_id_summary"]["invalid_numbers"] += len(doc_result["invalid_numbers"])
             else:
                 logger.info(f"Skipping non-supported document in current flow: {document.file_name}")
                 continue
 
-        if results["aadhar_summary"]["processed"] == 0 and results["pan_summary"]["processed"] == 0:
+        if (results["aadhar_summary"]["processed"] == 0 and 
+            results["pan_summary"]["processed"] == 0 and 
+            results["voter_id_summary"]["processed"] == 0):
             results["status"] = "no_supported_documents"
-            results["message"] = "No Aadhar or PAN documents found in loaded document set"
+            results["message"] = "No Aadhar, PAN, or Voter ID documents found in loaded document set"
 
         self.last_results = results
         return self.last_results
@@ -345,6 +461,7 @@ class DetectionPipeline:
 
         summary = self.last_results.get("aadhar_summary", {})
         pan_summary = self.last_results.get("pan_summary", {})
+        voter_summary = self.last_results.get("voter_id_summary", {})
         
         report_lines = [
             "========================================================================",
@@ -363,6 +480,13 @@ class DetectionPipeline:
             f"- Numbers found: {pan_summary.get('numbers_found', 0)}",
             f"- Valid numbers: {pan_summary.get('valid_numbers', 0)}",
             f"- Invalid/suspicious numbers: {pan_summary.get('invalid_numbers', 0)}",
+            "",
+            "Voter ID Summary:",
+            f"- Processed files: {voter_summary.get('processed', 0)}",
+            f"- OCR success: {voter_summary.get('ocr_success', 0)}",
+            f"- Numbers found: {voter_summary.get('numbers_found', 0)}",
+            f"- Valid numbers: {voter_summary.get('valid_numbers', 0)}",
+            f"- Invalid/suspicious numbers: {voter_summary.get('invalid_numbers', 0)}",
             "========================================================================",
             "",
             "Detailed Document Results:"
@@ -387,7 +511,7 @@ class DetectionPipeline:
                 ])
             else:
                 for check in checks:
-                    doc_num = check.get('aadhar_number') or check.get('pan_number') or "-"
+                    doc_num = check.get('aadhar_number') or check.get('pan_number') or check.get('voter_id') or "-"
                     raw_ocr = check.get('raw_match') or "-"
                     rows.append([
                         "" if doc_printed else doc_res['file_name'],

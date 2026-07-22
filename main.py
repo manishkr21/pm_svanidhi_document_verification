@@ -63,7 +63,11 @@ def main():
         # Determine which document type(s) to process
         if len(sys.argv) > 1:
             doc_type_arg = sys.argv[1]
-            if doc_type_arg.lower() in [dt.value for dt in DocumentType]:
+            if doc_type_arg.lower() == "voter_id":
+                logger.info("Redirecting to automated Voter ID Excel verification script...")
+                from fake_doc_detector.voter_id import verify_voter_id
+                return verify_voter_id.main()
+            elif doc_type_arg.lower() in [dt.value for dt in DocumentType]:
                 # Process specific document type
                 doc_type = DocumentType(doc_type_arg.lower())
                 logger.info(f"Processing document type: {doc_type.value}")
