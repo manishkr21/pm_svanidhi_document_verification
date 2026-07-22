@@ -126,7 +126,7 @@ def process_ai_detection(data_dir: str):
             pil_img = Image.open(img_path).convert("RGB")
             face_detected, cropped_face = detect_face(pil_img)
             if not face_detected:
-                print(f" - Face Detection: No face detected. Analyzing full image...")
+                # print(f" - Face Detection: No face detected. Analyzing full image...")
                 pred_class, real_score, gan_score = predict_ai_image(pil_img, model=model)
             else:
                 print(f" - Face Detection: Face detected successfully!")
