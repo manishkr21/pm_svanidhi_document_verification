@@ -8,9 +8,10 @@ Uses Anthropic Claude LLM for dynamic JSON document extraction via file upload.
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 from fastapi import FastAPI, File, UploadFile, HTTPException, Query
+from fastapi.openapi.utils import get_openapi
 from pydantic import BaseModel, Field
 
 from config import logger, get_api_key, DEFAULT_MODEL, DEFAULT_PORT
@@ -22,6 +23,28 @@ app = FastAPI(
     description="FastAPI service for document OCR and Anthropic Claude LLM structured data extraction via file upload.",
     version="2.1.0"
 )
+
+
+def custom_openapi() -> Dict[str, Any]:
+    """Custom OpenAPI schema generator to ensure Swagger UI displays file upload pickers for file arrays."""
+    if app.openapi_schema:
+        return app.openapi_schema
+    openapi_schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        description=app.description,
+        routes=app.routes,
+    )
+    for schema in openapi_schema.get("components", {}).get("schemas", {}).values():
+        if isinstance(schema, dict) and "properties" in schema:
+            for prop in schema["properties"].values():
+                if prop.get("type") == "array" and "items" in prop:
+                    prop["items"]["format"] = "binary"
+    app.openapi_schema = openapi_schema
+    return app.openapi_schema
+
+
+app.openapi = custom_openapi
 
 processor = DocumentProcessor(lang="eng")
 
@@ -63,7 +86,6 @@ def get_llm_extractor(model: str = DEFAULT_MODEL) -> LLMExtractor:
 
 
 @app.get("/", response_model=HealthResponse)
-@app.get("/health", response_model=HealthResponse)
 def health_check() -> HealthResponse:
     """Health check endpoint."""
     has_llm_key = bool(get_api_key())
@@ -75,55 +97,78 @@ def health_check() -> HealthResponse:
     )
 
 
-@app.post("/extract", response_model=ExtractResponse)
+@app.post("/extract", response_model=List[ExtractResponse])
 async def extract_document(
-    file: UploadFile = File(...),
+    files: List[UploadFile] = File(..., description="One or more document files (PDF or Images)"),
     model: str = Query(DEFAULT_MODEL, description=f"Anthropic Claude model (default: {DEFAULT_MODEL})")
-) -> ExtractResponse:
+) -> List[ExtractResponse]:
     """
-    Accepts document file upload (Image or PDF), performs OCR, and extracts dynamic JSON data via Anthropic Claude LLM.
+    Accepts document file uploads (Images or PDFs), performs OCR, and extracts dynamic JSON data via Anthropic Claude LLM.
+    Processes each document separately and sends individual LLM calls.
     """
-    if not file.filename:
-        raise HTTPException(status_code=400, detail="No file provided")
+    if not files:
+        raise HTTPException(status_code=400, detail="No files provided")
 
-    suffix = Path(file.filename).suffix.lower()
+    results: List[ExtractResponse] = []
     allowed_exts = processor.SUPPORTED_IMAGE_EXTS.union({".pdf"})
-    if suffix not in allowed_exts:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported file format '{suffix}'. Allowed: PDF, {', '.join(sorted(processor.SUPPORTED_IMAGE_EXTS))}"
-        )
 
-    tmp_file_path: Optional[Path] = None
-    try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-            shutil.copyfileobj(file.file, tmp)
-            tmp_file_path = Path(tmp.name)
+    for file in files:
+        if not file.filename:
+            results.append(ExtractResponse(
+                filename="unknown",
+                total_pages=0,
+                extraction_method="none",
+                data={"error": "No filename provided"}
+            ))
+            continue
 
-        ocr_result = processor.process(tmp_file_path)
+        suffix = Path(file.filename).suffix.lower()
+        if suffix not in allowed_exts:
+            results.append(ExtractResponse(
+                filename=file.filename,
+                total_pages=0,
+                extraction_method="none",
+                data={"error": f"Unsupported file format '{suffix}'. Allowed: PDF, {', '.join(sorted(processor.SUPPORTED_IMAGE_EXTS))}"}
+            ))
+            continue
 
-        llm = get_llm_extractor(model=model)
-        structured_data = llm.extract_from_file(tmp_file_path, model_override=model)
-        if "error" in structured_data and ocr_result.get("full_text"):
-            structured_data = llm.extract_from_text(ocr_result.get("full_text", ""), model_override=model)
-        extraction_method = f"llm ({model})"
+        tmp_file_path: Optional[Path] = None
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                shutil.copyfileobj(file.file, tmp)
+                tmp_file_path = Path(tmp.name)
 
-        return ExtractResponse(
-            filename=file.filename,
-            total_pages=ocr_result.get("total_pages", 1),
-            extraction_method=extraction_method,
-            data=structured_data
-        )
+            ocr_result = processor.process(tmp_file_path)
 
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error("Failed to process document '%s': %s", file.filename, e, exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to process document: {str(e)}")
+            llm = get_llm_extractor(model=model)
+            structured_data = llm.extract_from_file(tmp_file_path, model_override=model)
+            if "error" in structured_data and ocr_result.get("full_text"):
+                structured_data = llm.extract_from_text(ocr_result.get("full_text", ""), model_override=model)
+            extraction_method = f"llm ({model})"
 
-    finally:
-        if tmp_file_path and tmp_file_path.exists():
-            tmp_file_path.unlink(missing_ok=True)
+            results.append(ExtractResponse(
+                filename=file.filename,
+                total_pages=ocr_result.get("total_pages", 1),
+                extraction_method=extraction_method,
+                data=structured_data
+            ))
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error("Failed to process document '%s': %s", file.filename, e, exc_info=True)
+            results.append(ExtractResponse(
+                filename=file.filename,
+                total_pages=0,
+                extraction_method="error",
+                data={"error": f"Failed to process document: {str(e)}"}
+            ))
+
+        finally:
+            if tmp_file_path and tmp_file_path.exists():
+                tmp_file_path.unlink(missing_ok=True)
+
+    return results
 
 
 def find_available_port(default_port: int = DEFAULT_PORT) -> int:
