@@ -42,13 +42,14 @@ TESSDATA_DIR: Optional[Path] = LOCAL_TESSDATA if LOCAL_TESSDATA.exists() else No
 if TESSDATA_DIR:
     os.environ["TESSDATA_PREFIX"] = str(TESSDATA_DIR)
 
-DEFAULT_MODEL: str = os.getenv("DEFAULT_MODEL", "claude-fable-5")
+DEFAULT_MODEL: str = os.getenv("DEFAULT_MODEL", "Qwen/Qwen3-32B")
+QWEN_API_URL: str = os.getenv("QWEN_API_URL", "http://172.31.102.10:8092/vllm_api/v1/chat/completions")
 DEFAULT_PORT: int = int(os.getenv("PORT", "8005"))
-API_TIMEOUT: int = int(os.getenv("API_TIMEOUT", "60"))
+API_TIMEOUT: int = int(os.getenv("API_TIMEOUT", "180"))
 
 SUPPORTED_IMAGE_EXTS: Set[str] = {".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tiff", ".tif"}
 
 
 def get_api_key() -> Optional[str]:
-    """Retrieves API key from environment."""
-    return os.getenv("ANTHROPIC_API_KEY")
+    """Retrieves API key from environment if present (optional for local vLLM)."""
+    return os.getenv("ANTHROPIC_API_KEY") or os.getenv("API_KEY")
