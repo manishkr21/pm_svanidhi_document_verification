@@ -6,6 +6,8 @@ PDF-to-Image rendering fallback for scanned documents, image preprocessing,
 automatic orientation detection (0°, 90°, 180°, 270°), and OCR execution.
 """
 
+import io
+import base64
 import tempfile
 import subprocess
 from pathlib import Path
@@ -245,6 +247,17 @@ class DocumentProcessor:
             raise ValueError(
                 f"Unsupported file format: {path}. Supported formats: PDF, {', '.join(self.SUPPORTED_IMAGE_EXTS)}"
             )
+
+    def convert_image_to_base64(self, image: Image.Image, format: str = "PNG") -> str:
+        """Converts PIL Image to base64 encoded string."""
+        buffer = io.BytesIO()
+        image.save(buffer, format=format)
+        return base64.b64encode(buffer.getvalue()).decode("utf-8")
+
+    def process_images_base64(self, file_path: Union[str, Path]) -> List[str]:
+        """Loads document file and converts all pages to base64 image strings without running Tesseract OCR."""
+        images = self.load_document(file_path)
+        return [self.convert_image_to_base64(img) for img in images]
 
     def process(self, file_path: Union[str, Path]) -> Dict[str, Any]:
         """

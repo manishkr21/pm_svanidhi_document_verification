@@ -291,8 +291,7 @@ class DocumentVerifier:
             confidence_score = 0.0
 
         display_name = (
-            person_id
-            or (user_detail.get("ApplicantName") if isinstance(user_detail, dict) else None)
+            (user_detail.get("ApplicantName") if isinstance(user_detail, dict) else None)
             or (user_detail.get("applicant_name") if isinstance(user_detail, dict) else None)
             or "user"
         )

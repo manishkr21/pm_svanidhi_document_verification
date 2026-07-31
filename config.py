@@ -42,9 +42,9 @@ TESSDATA_DIR: Optional[Path] = LOCAL_TESSDATA if LOCAL_TESSDATA.exists() else No
 if TESSDATA_DIR:
     os.environ["TESSDATA_PREFIX"] = str(TESSDATA_DIR)
 
-DEFAULT_MODEL: str = os.getenv("DEFAULT_MODEL", "Qwen/Qwen3-32B")
+DEFAULT_MODEL: str = os.getenv("DEFAULT_MODEL", "Qwen/Qwen2.5-VL-32B-Instruct")
 QWEN_API_URL: str = os.getenv("QWEN_API_URL", "http://172.31.102.10:8092/vllm_api/v1/chat/completions")
-DEFAULT_PORT: int = int(os.getenv("PORT", "8005"))
+DEFAULT_PORT: int = int(os.getenv("PORT", os.getenv("DEFAULT_PORT", "5030")))
 API_TIMEOUT: int = int(os.getenv("API_TIMEOUT", "180"))
 
 SUPPORTED_IMAGE_EXTS: Set[str] = {".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tiff", ".tif"}

@@ -197,16 +197,15 @@ async def extract_document(
                 shutil.copyfileobj(file.file, tmp)
                 tmp_file_path = Path(tmp.name)
 
-            ocr_result = processor.process(tmp_file_path)
             llm = get_llm_extractor(model=model)
             structured_data = llm.extract_from_file(tmp_file_path, model_override=model)
-            if "error" in structured_data and ocr_result.get("full_text"):
-                structured_data = llm.extract_from_text(ocr_result.get("full_text", ""), model_override=model)
+            method = structured_data.pop("_extraction_method", f"llm ({model})")
+            total_pages = len(processor.load_document(tmp_file_path))
 
             extractions.append(ExtractResponse(
                 filename=file.filename,
-                total_pages=ocr_result.get("total_pages", 1),
-                extraction_method=f"llm ({model})",
+                total_pages=total_pages,
+                extraction_method=method,
                 data=structured_data
             ))
 
